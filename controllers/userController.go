@@ -3,13 +3,12 @@ package controllers
 import (
 	"GoFiber/config"
 	"GoFiber/models"
-	"errors"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"gorm.io/gorm"
 )
 
+/*
 func TransferFunds(c *fiber.Ctx) error {
 	type TransferRequest struct {
 		FromUserID uint `json:"from_user_id"`
@@ -58,6 +57,65 @@ func TransferFunds(c *fiber.Ctx) error {
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "transfer successful",
 		"fromUser": fromUser, "toUser": toUser})
+}
+*/
+
+func TransferFunds(c *fiber.Ctx) error {
+	type TransferRequest struct {
+		FromUserID uint `json:"from_user_id"`
+		ToUserID   uint `json:"to_user_id"`
+		Amount     int  `json:"amount"`
+	}
+
+	var request TransferRequest
+	if err := c.BodyParser(&request); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Cannot parse JSON"})
+	}
+
+	// Start a transaction
+	tx := config.DB.Begin()
+
+	// Find the sender
+	var sender models.User
+	if err := tx.First(&sender, request.FromUserID).Error; err != nil {
+		tx.Rollback() // Rollback the transaction
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Sender not found"})
+	}
+
+	// Find the receiver
+	var receiver models.User
+	if err := tx.First(&receiver, request.ToUserID).Error; err != nil {
+		tx.Rollback() // Rollback the transaction
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Receiver not found"})
+	}
+
+	// Check if the sender has enough balance
+	if sender.Balance < request.Amount {
+		tx.Rollback() // Rollback the transaction
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Insufficient balance"})
+	}
+
+	// Deduct from sender
+	sender.Balance -= request.Amount
+	if err := tx.Save(&sender).Error; err != nil {
+		tx.Rollback() // Rollback the transaction
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update sender balance"})
+	}
+
+	// Add to receiver
+	receiver.Balance += request.Amount
+	if err := tx.Save(&receiver).Error; err != nil {
+		tx.Rollback() // Rollback the transaction
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update receiver balance"})
+	}
+
+	// Commit the transaction
+	if err := tx.Commit().Error; err != nil {
+		tx.Rollback() // Rollback the transaction
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Transaction failed"})
+	}
+
+	return c.JSON(fiber.Map{"message": "Transfer successful"})
 }
 
 func GetUsersWithPosts(c *fiber.Ctx) error {
